@@ -20,7 +20,7 @@ export default {
                 thirdRegister: '',
             },
             operations: [ 
-                "AND", "ADD", "SUB", "MUL", "CMP", "CMN", "EOR", "ORR", "LDR", "MOV"
+                "AND", "ADD", "SUB", "MUL", "CMP", "CMN", "BEQ", "ORR", "LDR", "MOV"
             ]
         }
     }
