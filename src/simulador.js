@@ -6,185 +6,315 @@ export class Simulator {
     // Commit
     // Escrito
 
-    constructor(operations, ) {
+    constructor(operations, fullSimulation) {
+        this.fullSimulation = fullSimulation
+        this.status = {
+            initial: "",
+            issue: "Despachado",
+            execution: "Em execução",
+            write: "Escrita",
+            commit: "Commit"
+        }
+        this.amount = 3
+        this.initialState = {
+            busy: false, 
+            Op: "",
+            Vj:"",
+            Vk:"",
+            Qj:"",
+            Qk: "",
+            Dest:"",
+            A:"",
+        }
+
+        this.reserveStation = {
+            Add1: { ...this.initialState },
+            Add2: { ...this.initialState },
+            Add3: { ...this.initialState },
+            Load1: { ...this.initialState },
+            Load2: { ...this.initialState },
+            Mult1: { ...this.initialState },
+            Mult2: { ...this.initialState },
+        }
 
         this.operations = operations
 
         this.estadoInstrucoes = [];
-        for(let i = 0; i < this.operations.length; i++) {
-            let linha = {}
-            linha["instrucao"] = {                      
-                "operacao": this.operations[i]["operation"],
-                "firstRegister": this.operations[i]["firstRegister"],
-                "secondRegister": this.operations[i]["secondRegister"],
-                "thirdRegister": this.operations[i]["thirdRegister"],
-            };
+        this.operations.forEach((operation) => {
+            operation.status = this.status.initial
+            operation.destiny = operation.firstRegister
+            operation.value = ""
+            operation.finished = false
+        })
 
-            linha["index"] = i;                          
-            linha["status"] = null;                     
-            this.estadoInstrucoes[i] = linha;
+        this.verifyDependencies()
+
+        this.registers = Array.apply(null, {length: 32}).map(Function.call, () => { return {busy: false, content: ""}})
+    }
+
+    verifyDependencies(){
+        for (let i = 0; i < this.operations.length; i++) {
+            this.operations[i].dependencies = new Set()
+            for (let j = 0; j < i; j++) {
+                if (!this.operations[i].finished) {
+                    if (!this.operations[j].finished && (this.operations[i].secondRegister == this.operations[j].firstRegister || this.operations[i]?.thirdRegister == this.operations[j].firstRegister)) {
+                        this.operations[i].dependencies.add(this.operations[j].firstRegister)
+                    }
+                    if (!this.operations[j].finished && this.operations[j].operation == "BEQ") {
+                        const [, amount] = this.operations[j].thirdRegister.split("#")
+                        i - j <= amount && this.operations[i].dependencies.add("BEQ")
+                    }
+                }
+            }
         }
+    }
+
+    issuesInstructions(){
+        this.operations.forEach((operation) => {
+            if (operation.status == this.status.initial) {   
+                let functionalStation = this.verificaUFInstrucao(operation.operation)
+                if (this.FunctionalUnitAllocation(functionalStation, operation)) {
+                    operation.status = this.status.issue
+                }
+            }
+        })
+        this.fullSimulation && this.execInstructions()
+    }
+
+    execInstructions(){
+        this.verifyDependencies()
+        this.operations.forEach((operation) => {
+            if (operation.status == this.status.issue && operation.dependencies.size == 0) {
+                if (operation.operation == "BEQ" && operation?.fourthRegister) {
+                    const [, amount] = operation.thirdRegister.split("#")
+                    this.makeBEQ(operation, amount)
+                    let functionalStation = this.verificaUFInstrucao(operation.operation)
+                    this.FunctionalUnitDesallocation(functionalStation, operation)
+                    this.verifyDependencies()
+                } else if(operation.operation == "BEQ") {
+                    let index = this.operations.findIndex((op) => {
+                        return op == operation
+                    })
+                    operation.finished = true
+                    this.verifyDependencies()
+                    let functionalStation = this.verificaUFInstrucao(operation.operation)
+                    this.FunctionalUnitDesallocation(functionalStation, operation)
+                    this.operations.splice(index, 1)
+                }
+    
+                operation.status = this.status.execution
+            }
+        })
+        this.fullSimulation && this.writeInstructions()
+    }
+
+    commitInstructions(){
+        this.operations.forEach((operation, index) => {
+            if (operation.status == this.status.write) {
+                operation.status = this.status.commit
+                operation.finished = true
+                let functionalStation = this.verificaUFInstrucao(operation.operation)
+                this.FunctionalUnitDesallocation(functionalStation, operation)
+                const [, register] = operation.firstRegister.split("R")
+                this.registers[register].busy = true
+                this.registers[register].content = "#"+index
+                if (operation != 'LDR' && operation != 'MOV') {
+                    operation.value = operation.secondRegister + " + " + operation.secondRegister
+                } else {
+                    operation.value = `${operation.secondRegister} -> #${index}`
+                }
+            }
+        })
+        this.verifyDependencies()
+        this.fullSimulation && this.issuesInstructions()
+    }
+
+    writeInstructions(){
+        this.operations.forEach((operation) => {
+            if (operation.status == this.status.execution) {
+                operation.status = this.status.write
+            }
+        })
+        this.fullSimulation && this.commitInstructions()
+    }
+
+    execCycle(func){
+        func.apply()
     }
 
     verificaUFInstrucao(instrucao) {
-        // Funcao que verifica em qual unidade funcional cada instrucao deve executar
-        "AND", "ADD", "SUB", "MUL", "CMP", "CMN", "BEQ", "ORR", "LDR", "MOV"
-        switch (instrucao.operacao) {
-            case 'ADD':
-                return 'Add'
-            case 'SUB':
-                return 'Add'
-            case 'MUL':
-                return 'Mult'
-            case 'LDR':
-                return 'Load'
-            case 'MOV':
-                return 'Load'
-            case 'AND':
-                return 'Add'
-            case 'CMP':
-                return 'Add'
-            case 'BEQ':
-                return 'Add'
-            case 'CMN':
-                return 'Add'
-            case 'ORR':
-                return 'Add'
-         }
+        const MapUFI = {
+            ADD: "Add",
+            AND: "Add",
+            SUB: "Add",
+            CMP: "Add",
+            CMN: "Add",
+            BEQ: "Add",
+            ORR: "Add",
+            MUL: "Mult",
+            MOV: "Load",
+            LDR: "Load",
+        };
+        return MapUFI[instrucao];
     }
 
-    alocaFuMem(uf, instrucao, estadoInstrucao) {
-        // Funcao que aloca uma unidade funcional de memória para uma instrucao
-        uf.instrucao = instrucao;
-        uf.estadoInstrucao = estadoInstrucao;
-        uf.tempo = 1; // salva o número de ciclos + 1 uma vez que quando estiver livre, nao execute um ciclo a menos (possivel execucao apos o issue)
-        uf.ocupado = true;
-        uf.operacao = instrucao.operation;
-        uf.endereco = instrucao.secondRegister + '+' + instrucao.thirdRegister;
-        uf.destino = instrucao.firstRegister;
-        uf.qi = null;
-        uf.qj = null;
+    FunctionalUnitAllocation(functionalUnit, operation){
+        let allocated = false
+        let UFs = Object.keys(this.reserveStation)
+        switch (functionalUnit) {
+            case "Add":
+                UFs.forEach((uf) => {
+                    if(uf.includes("Add") && this.reserveStation[uf].busy == false && allocated == false){
 
-        // // caso a instrucao seja de store, verifica se tem que esperar a uf escrever no registrador que vai salvar
-        // if (instrucao.operacao === 'SD') {
-        //     // busca no banco de registradores qual o valor que esta escrito (VAL(UF)-execucao completa; UF-execucao pendente)
-        //     let UFQueTemQueEsperar = this.estacaoRegistradores[instrucao.registradorR];
+                        this.reserveStation[uf].busy = true
+                        this.reserveStation[uf].Op = operation.operation
+                        this.reserveStation[uf].Vj = operation.secondRegister
+                        this.reserveStation[uf].Vk = operation?.thirdRegister ?? ""
+                        this.reserveStation[uf].Dest = operation.firstRegister
+                        this.reserveStation[uf].A = ""
 
-        //     // caso o nome seja de uma das unidades funcionais, marca que tem que esperar ela
-        //     if ((UFQueTemQueEsperar in this.unidadesFuncionais) || (UFQueTemQueEsperar in this.unidadesFuncionaisMemoria))
-        //         uf.qi = UFQueTemQueEsperar;
-        //     else
-        //         uf.qi = null;
-        // }
+                        const [, register] = operation.firstRegister.split("R")
+                        this.registers[register].busy = true
+                        this.registers[register].content = operation.firstRegister
 
-        // // verifica se tem que esperar a uf de inteiros escrever o valor do registrador de deslocamento
-        // // busca no banco de registradores qual o valor que esta escrito (VAL(UF)-execucao completa; UF-execucao pendente)
-        // let UFintQueTemQueEsperar = this.estacaoRegistradores[instrucao.registradorT];
+                        if(operation.dependencies.has(operation.secondRegister)){
+                            this.reserveStation[uf].Qj = operation.secondRegister ?? ""
+                        } 
+                        if(operation.dependencies.has(operation.thirdRegister)){
+                            this.reserveStation[uf].Qk = operation.thirdRegister ?? ""
+                        }
 
-        // // caso o nome seja de uma das unidades funcionais, marca que tem que esperar ela
-        // if ((UFintQueTemQueEsperar in this.unidadesFuncionais) || (UFintQueTemQueEsperar in this.unidadesFuncionaisMemoria))
-        //     uf.qj = UFintQueTemQueEsperar;
-        // else
-        //     uf.qj = null;
-    }
+                        allocated = true
+                        return allocated
+                    }
+                })
+                return allocated
+            case "Load":
+                UFs.forEach((uf) => {
+                    if(uf.includes("Load") && this.reserveStation[uf].busy == false && allocated == false){
 
-    alocaFU(uf, instrucao, estadoInstrucao) {
-        // funcao que aloca uma unidade funcional
-            uf.instrucao = instrucao;
-            uf.estadoInstrucao = estadoInstrucao;
-            uf.tempo =  1; // é somado 1 pq vai ser subtraido 1 na fase de execucao apos isso 
-            uf.ocupado = true;
-            uf.operacao = instrucao.operation;
-    
-            let reg_j;
-            let reg_k;
-            let reg_j_inst;
-            let reg_k_inst;
-    
-            // caso seja uma das instrucoes condicionais
-            if (instrucao.operacao === 'BEQ') {
-                reg_j = this.estacaoRegistradores[instrucao.firstRegister];   // busca o nome da uf q esta usando o registrador r
-                reg_k = this.estacaoRegistradores[instrucao.secondRegister];   // busca o nome da uf q esta usando o registrador s
-    
-                reg_j_inst = instrucao.firstRegister;                         // salva o nome dos registradores que veio da instrucao
-                reg_k_inst = instrucao.secondRegister;
-            } else {
-                reg_j = this.estacaoRegistradores[instrucao.secondRegister];   // busca o nome da uf q esta usando o registrador s
-                reg_k = this.estacaoRegistradores[instrucao.thirdRegister];   // busca o nome da uf q esta usando o registrador t
-    
-                reg_j_inst = instrucao.secondRegister;                         // salva o nome dos registradores que veio da instrucao
-                reg_k_inst = instrucao.thirdRegister;
-            }
-    
-            // se o registrador j e nulo (ninguem usou ele) ou nao definido (label), usa como valor o registrador que veio da instrucao
-            if (reg_j === null || reg_j === undefined)
-                uf.vj = reg_j_inst;
-            else {
-                // caso o nome seja uma unidade funcional, este registrador vai ter o valor escrito ainda, entao tem que esperar
-                if ((reg_j in this.unidadesFuncionais) || (reg_j in this.unidadesFuncionaisMemoria))
-                    uf.qj = reg_j;
-                else
-                    uf.vj = reg_j;
-            }
-    
-            // se o registrador k e nulo (ninguem usou ele) ou nao definido (label), usa como valor o registrador que veio da instrucao
-            if (reg_k === null || reg_k === undefined)
-                uf.vk = reg_k_inst;
-            else {
-                // caso o nome seja uma unidade funcional, este registrador vai ter o valor escrito ainda, entao tem que esperar
-                if ((reg_k in this.unidadesFuncionais) || (reg_k in this.unidadesFuncionaisMemoria))
-                    uf.qk = reg_k;
-                else
-                    uf.vk = reg_k;
-            }
+                        this.reserveStation[uf].busy = true
+                        this.reserveStation[uf].Op = operation.operation
+                        this.reserveStation[uf].Vj = operation.secondRegister
+                        this.reserveStation[uf].Vk = ""
+                        this.reserveStation[uf].Dest = ""
+                        this.reserveStation[uf].A = operation.firstRegister
+
+                        const [, register] = operation.firstRegister.split("R")
+                        this.registers[register].busy = true
+                        this.registers[register].content = operation.firstRegister
+
+                        if(operation.dependencies.has(operation.secondRegister)){
+                            this.reserveStation[uf].Qj = operation.secondRegister ?? ""
+                        }
+
+                        allocated = true
+                        return allocated
+                    }
+                })
+                return allocated
+            default:
+                UFs.forEach((uf) => {
+                    if(uf.includes("Mult") && this.reserveStation[uf].busy == false && allocated == false){
+
+                        this.reserveStation[uf].busy = true
+                        this.reserveStation[uf].Op = operation.operation
+                        this.reserveStation[uf].Vj = operation.secondRegister
+                        this.reserveStation[uf].Vk = operation?.thirdRegister ?? ""
+                        this.reserveStation[uf].Dest = operation.firstRegister
+                        this.reserveStation[uf].A = ""
+
+                        const [, register] = operation.firstRegister.split("R")
+                        this.registers[register].busy = true
+                        this.registers[register].content = operation.firstRegister
+
+                        if(operation.dependencies.has(operation.secondRegister)){
+                            this.reserveStation[uf].Qj = operation.secondRegister ?? ""
+                        } 
+                        if(operation.dependencies.has(operation.thirdRegister)){
+                            this.reserveStation[uf].Qk = operation.thirdRegister ?? ""
+                        }
+
+                        allocated = true
+                        return allocated
+                    }
+                })
+                return allocated
         }
-
-    desalocaUFMem(ufMem) {
-        // funcao que desaloca (limpa os campos) das unidades funcionais de memoria
-            ufMem.instrucao = null;
-            ufMem.estadoInstrucao = null;
-            ufMem.tempo = null;
-            ufMem.ocupado = false;
-            ufMem.operacao = null;
-            ufMem.endereco = null;
-            ufMem.destino = null;
-            ufMem.qi = null;
-            ufMem.qj = null;
     }
 
-    desalocaUF(uf) {
-    // funcao que desaloca (limpa os campos) das unidades funcionais
-        uf.instrucao = null;
-        uf.estadoInstrucao = null;
-        uf.tempo = null;
-        uf.ocupado = false;
-        uf.operacao = null;
-        uf.vj = null;
-        uf.vk = null;
-        uf.qj = null;
-        uf.qk = null;
+    FunctionalUnitDesallocation(functionalUnit, operation){
+        let desallocated = false
+        let UFs = Object.keys(this.reserveStation)
+        switch (functionalUnit) {
+            case 'Add':
+                UFs.forEach((uf) => {
+                    if(uf.includes("Add") && this.reserveStation[uf].busy == true && desallocated == false){
+                        if(this.reserveStation[uf].Op == operation.operation &&
+                        this.reserveStation[uf].Vj == operation.secondRegister &&
+                        this.reserveStation[uf].Vk == operation.thirdRegister &&
+                        this.reserveStation[uf].Dest == operation.firstRegister)
+                        {
+                            this.resetFunctionalUnit(this.reserveStation[uf])
+                            desallocated = true
+                            return desallocated
+                        }
+                    }
+                })
+                return desallocated
+            case 'Load':
+                UFs.forEach((uf) => {
+                    if(uf.includes("Load") && this.reserveStation[uf].busy == true && desallocated == false){
+                        if(this.reserveStation[uf].Op == operation.operation &&
+                        this.reserveStation[uf].Vj == operation.secondRegister &&
+                        this.reserveStation[uf].A == operation.firstRegister)
+                        {
+                            this.resetFunctionalUnit(this.reserveStation[uf])
+                            desallocated = true
+                            return desallocated
+                        }
+                    }
+                })
+                return desallocated
+            default:
+                UFs.forEach((uf) => {
+                    if(uf.includes("Mult") && this.reserveStation[uf].busy == true && desallocated == false){
+                        if(this.reserveStation[uf].Op == operation.operation &&
+                        this.reserveStation[uf].Vj == operation.secondRegister &&
+                        this.reserveStation[uf].Vk == operation.thirdRegister &&
+                        this.reserveStation[uf].Dest == operation.firstRegister)
+                        {
+                            this.resetFunctionalUnit(this.reserveStation[uf])
+                            desallocated = true
+                            return desallocated
+                        }
+                    }
+                })
+                return desallocated
+        }
     }
 
-    getInstruction(){
-        // let instruction = this.operations.forEach(element => {
-        //     if (element.status == 'Initial') return element
-        // });
-        // return instruction
+    resetFunctionalUnit(functionalUnit){
+        functionalUnit.busy = false
+        functionalUnit.Op = ""
+        functionalUnit.Vj =""
+        functionalUnit.Vk =""
+        functionalUnit.Qj =""
+        functionalUnit.Qk = ""
+        functionalUnit.Dest =""
+        functionalUnit.A =""
+        return functionalUnit
     }
 
-    despachaInstrucao(){
-
-    }
-
-    executaInstrucao(){
-
-    }
-
-    commitaInstrucao(){
-
-    }
-
-    escreveInstrucao(){
-
+    makeBEQ(operation, amount){
+        let index = this.operations.findIndex((op) => {
+            return op == operation
+        })
+        for (let i = index; i < (index+Number(amount)) + 1; i++) {       
+            let functionalStation = this.verificaUFInstrucao(this.operations[i].operation)
+            this.FunctionalUnitDesallocation(functionalStation, this.operations[i])
+        }
+        this.operations.splice(index, ++amount)
+        this.verifyDependencies()
     }
 }
